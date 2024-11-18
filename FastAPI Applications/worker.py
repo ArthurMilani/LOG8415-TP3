@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
+import subprocess
 import uvicorn
 import logging
 import requests
@@ -17,14 +18,39 @@ def receive_request(write_request: WriteRequest):
 
     query = write_request.query
 
-    #TODO: Uptade the database
-    return {"message": "This is a write request"}
+    result = execute_query(query)
+    # if "error" in result:
+    #     raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+    #TODO: Allow a replication of the operation to the workers
 
 
 @app.get("/read")
 def read_db(
     query: str = Query(..., description="SQL query to execute")
 ):
-    #TODO Change the database and return the response
+    result = execute_query(query)
+    # if "error" in result:
+        # raise HTTPException(status_code=500, detail=result["error"])
+    return result
 
-    return {"message": "This is a read request"}
+    
+def execute_query(query):
+    try:
+        # Executa o comando MySQL diretamente no terminal
+        result = subprocess.run(
+            ['sudo', 'mysql', '-e', query],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode == 0:
+            print(f"Resultado: {result}")
+        else:
+            print(f"Erro: {result.stderr}")
+            raise Exception({result.stderr})
+        print("Ola")
+        return {"result": result, "status": "success"}   
+    except Exception as e:
+        return {"error": f"Erro ao executar a query: {e}", "status": "failed"}
