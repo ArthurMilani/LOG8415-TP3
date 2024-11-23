@@ -85,27 +85,27 @@ def run_remote_commands(ssh, file_type):
             # "sudo apt install -y python3-boto3",
             #"kill -9 $(lsof -t -i :8000)",
             #"python3 -m uvicorn app:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &"
-            "sudo apt-get update -y",
-            "sudo apt-get install mysql-server -y",
-            "wget -N https://downloads.mysql.com/docs/sakila-db.tar.gz",
-            "tar -xzvf sakila-db.tar.gz",
-            "sudo mysql -u root -e 'CREATE DATABASE sakila;'",
-            "sudo mysql -u root sakila < sakila-db/sakila-schema.sql",
-            "sudo mysql -u root sakila < sakila-db/sakila-data.sql",
-            "sudo apt install python3 python3-pip -y",
-            "sudo apt install -y python3-uvicorn",
-            "sudo apt install -y python3-fastapi",
-            "sudo apt install -y python3-boto3",
+            # "sudo apt-get update -y", #Uncomment from here
+            # "sudo apt-get install mysql-server -y",
+            # "wget -N https://downloads.mysql.com/docs/sakila-db.tar.gz",
+            # "tar -xzvf sakila-db.tar.gz",
+            # "sudo mysql -u root -e 'CREATE DATABASE sakila;'", #TODO: Create Table
+            # "sudo mysql -u root sakila < sakila-db/sakila-schema.sql",
+            # "sudo mysql -u root sakila < sakila-db/sakila-data.sql",
+            # "sudo apt install python3 python3-pip -y",
+            # "sudo apt install -y python3-uvicorn",
+            # "sudo apt install -y python3-fastapi",
+            # "sudo apt install -y python3-boto3",
             "kill -9 $(lsof -t -i :8000)",
             f"python3 -m uvicorn {file_type}:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
         ]
     elif file_type == "proxy":
         commands = [
-            "sudo apt-get update -y",
-            "sudo apt-get install python3 python3-pip -y",
-            "sudo apt-get install -y python3-uvicorn",
-            "sudo apt-get install -y python3-fastapi",
-            "sudo apt-get install -y python3-boto3",
+            # "sudo apt-get update -y",
+            # "sudo apt-get install python3 python3-pip -y",
+            # "sudo apt-get install -y python3-uvicorn",
+            # "sudo apt-get install -y python3-fastapi",
+            # "sudo apt-get install -y python3-boto3",
             "kill -9 $(lsof -t -i :8000)",
             "python3 -m uvicorn proxy:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
         ]

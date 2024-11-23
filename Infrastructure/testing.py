@@ -7,6 +7,7 @@ import boto3
 import paramiko
 import os
 from scp import SCPClient
+import uuid
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
@@ -143,4 +144,4 @@ def get_ping(instance_dns):
 # VALUES ('Alice', 30), ('Bob', 25);
 # """
 # deploy_to_instance("ec2-18-213-4-237.compute-1.amazonaws.com")
-get_ping("ec2-3-80-151-238.compute-1.amazonaws.com")
+# get_ping("ec2-3-80-151-238.compute-1.amazonaws.com")
