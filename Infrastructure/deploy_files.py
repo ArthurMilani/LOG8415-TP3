@@ -9,7 +9,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 
 
-from constants import AWS_CREDENTIALS_FILE, PRIVATE_KEY_FILE, REGION, REMOTE_APP_PATH, REMOTE_AWS_CREDENTIALS_PATH, LOCAL_WORKER_PATH, LOCAL_MANAGER_PATH, LOCAL_PROXY_PATH
+from constants import AWS_CREDENTIALS_FILE, PRIVATE_KEY_FILE, REGION, REMOTE_APP_PATH, REMOTE_AWS_CREDENTIALS_PATH, LOCAL_WORKER_PATH, LOCAL_MANAGER_PATH, LOCAL_PROXY_PATH, TRUSTED_SECURITY_GROUP_NAME, LOCAL_TRUSTED_PATH, LOCAL_GATEKEEPER_PATH
 
 def get_running_instances(ec2_client):
     filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
@@ -17,6 +17,8 @@ def get_running_instances(ec2_client):
     workers = []
     managers = []
     proxies = []
+    gatekeepers = []
+    trusteds = []
 
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
@@ -38,7 +40,22 @@ def get_running_instances(ec2_client):
                     'InstanceType': instance['InstanceType'],
                     'PublicDnsName': instance['PublicDnsName']
                 })
-    return workers, managers, proxies
+            elif instance['Tags'][0]['Value'] == 'gatekeeper':
+                gatekeepers.append ({
+                    'InstanceId': instance['InstanceId'],
+                    'InstanceType': instance['InstanceType'],
+                    'PublicDnsName': instance['PublicDnsName'],
+                    'PrivateIpAddress': instance['PrivateIpAddress']
+                })
+            elif instance['Tags'][0]['Value'] == 'trusted_machine':
+                trusteds.append({
+                    'InstanceId': instance['InstanceId'],
+                    'InstanceType': instance['InstanceType'],
+                    'PublicDnsName': instance['PublicDnsName'],
+                    'PrivateIpAddress': instance['PrivateIpAddress']
+                })
+            
+    return workers, managers, proxies, gatekeepers, trusteds
 
 def get_target_group_instances(target_group_arn, elbv2_client):
     """Retrieve the instance IDs of all instances in a given target group."""
@@ -54,7 +71,7 @@ def create_ssh_client(instance_dns):
     ssh.connect(hostname=instance_dns, username='ubuntu', pkey=key)
     return ssh
 
-def deploy_script_via_scp(instance_dns, file_type, local_app_path):
+def deploy_script_via_scp(instance_dns, file_type, local_app_path, gatekeeper_ip=None):
     """Use SCP to copy the local script to the remote instance."""
     try:
         # Create SSH client
@@ -66,14 +83,14 @@ def deploy_script_via_scp(instance_dns, file_type, local_app_path):
             print(f"Successfully copied {local_app_path} to {instance_dns}:{REMOTE_APP_PATH}")
         
         # Run the script on the remote instance
-        run_remote_commands(ssh, file_type)
+        run_remote_commands(ssh, file_type, gatekeeper_ip)
         
     except Exception as e:
         print(f"Failed to deploy on {instance_dns}: {str(e)}")
     finally:
         ssh.close()
 
-def run_remote_commands(ssh, file_type):
+def run_remote_commands(ssh, file_type, gatekeeper_ip):
     """Run commands on the remote instance to install dependencies and run the app."""
     commands = []
     if file_type == "worker" or file_type == "manager":
@@ -96,19 +113,36 @@ def run_remote_commands(ssh, file_type):
             # "sudo apt install -y python3-uvicorn",
             # "sudo apt install -y python3-fastapi",
             # "sudo apt install -y python3-boto3",
+            # "kill -9 $(lsof -t -i :8000)",
+            # f"python3 -m uvicorn {file_type}:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
+        ]
+    elif file_type == "proxy" or file_type == "gatekeeper":
+        commands = [
+            "sudo apt-get update -y",
+            "sudo apt-get install python3 python3-pip -y",
+            "sudo apt-get install -y python3-uvicorn",
+            "sudo apt-get install -y python3-fastapi",
+            "sudo apt-get install -y python3-boto3",
             "kill -9 $(lsof -t -i :8000)",
             f"python3 -m uvicorn {file_type}:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
         ]
-    elif file_type == "proxy":
+    elif file_type == "trusted_machine":
         commands = [
-            # "sudo apt-get update -y",
-            # "sudo apt-get install python3 python3-pip -y",
-            # "sudo apt-get install -y python3-uvicorn",
-            # "sudo apt-get install -y python3-fastapi",
-            # "sudo apt-get install -y python3-boto3",
+            "sudo apt-get update -y",
+            "sudo apt-get install python3 python3-pip -y",
+            "sudo apt-get install -y python3-uvicorn",
+            "sudo apt-get install -y python3-fastapi",
+            "sudo apt-get install -y python3-boto3",
             "kill -9 $(lsof -t -i :8000)",
-            "python3 -m uvicorn proxy:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
+            f"python3 -m uvicorn {file_type}:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
+            f"sudo iptables -A INPUT -p tcp --dport 8000 -s {gatekeeper_ip} -j ACCEPT", # Allow traffic from gatekeeper
+            #f"sudo iptables -A INPUT -p tcp --dport 22 -s {gatekeeper_ip} -j ACCEPT", # Allow SSH traffic TODO: Uncomment
+            "sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT", # Allow SSH traffic TODO:REMOVE
+            "sudo iptables -A INPUT -p icmp -j ACCEPT", # Allow ICMP traffic for console TODO:REMOVE
+            "sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", # Allow established connections
+            #"sudo iptables -A INPUT -j DROP", # Drop all other traffic TODO: Uncomment
         ]
+            
     
     for command in commands:
         print(f"Executing: {command}")
@@ -152,12 +186,44 @@ def deploy_to_instance(instance_dns):
     finally:
         ssh.close()
 
+def update_ssh_rule(ec2_client, gatekeeper_ip):
+    try:
+        response = ec2_client.describe_security_groups(
+                Filters=[{"Name": "group-name", "Values": [TRUSTED_SECURITY_GROUP_NAME]}]
+            )
+        sg_ip = response["SecurityGroups"][0]["GroupId"]
+        ec2_client.revoke_security_group_ingress(
+            GroupId=sg_ip,
+            IpPermissions=[
+                    {
+                        'IpProtocol': 'tcp',
+                        'FromPort': 22,
+                        'ToPort': 22,
+                        'IpRanges': [{'CidrIp': "0.0.0.0/0"}]
+                    }
+            ]
+        )
+        ec2_client.authorize_security_group_ingress(
+            GroupId=sg_ip,
+            IpPermissions=[
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'IpRanges': [{'CidrIp': f"{gatekeeper_ip}/32"}]
+                }
+            ]
+        )
+    except Exception as e:
+        print(f"Failed to update SSH rule: {e}")
+
+
 def deploy_files():
     # Initialize AWS clients
     ec2 = boto3.client('ec2', region_name=REGION)
     #TODO: Adapt the code to deploy the right files to the right instances
     # Get running instances
-    workers, managers, proxies = get_running_instances(ec2_client=ec2)
+    workers, managers, proxies, gatekeepers, trusteds = get_running_instances(ec2_client=ec2)
 
     for worker in workers:
         print (f"Deploying to worker instance: {worker['PublicDnsName']}")
@@ -172,6 +238,21 @@ def deploy_files():
         deploy_to_instance(proxy['PublicDnsName'])
         print (f"Deploying to proxy instance: {proxy['PublicDnsName']}")
         deploy_script_via_scp(proxy['PublicDnsName'], "proxy", LOCAL_PROXY_PATH)
+
+    print(f"TRUSTEDS: {trusteds}")
+    for trusted_machine in trusteds:
+        print(f"Deploying Trusted Machine Credentials to large instance: {trusted_machine['PublicDnsName']}")
+        deploy_to_instance(trusted_machine['PublicDnsName'])
+        print(f"Deploying to trusted machine instance: {trusted_machine['PublicDnsName']}")
+        deploy_script_via_scp(trusted_machine['PublicDnsName'], "trusted_machine", LOCAL_TRUSTED_PATH, gatekeepers[0]['PrivateIpAddress'])
+
+    for gatekeeper in gatekeepers:
+        print(f"Deploying Gatekeeper Credentials to large instance: {gatekeeper['PublicDnsName']}")
+        deploy_to_instance(gatekeeper['PublicDnsName'])
+        print(f"Deploying to gatekeeper instance: {gatekeeper['PublicDnsName']}")
+        deploy_script_via_scp(gatekeeper['PublicDnsName'], "gatekeeper", LOCAL_GATEKEEPER_PATH)
+
+
 
     # for instance in instances:
     #     instance_id = instance['InstanceId']
@@ -200,6 +281,9 @@ def deploy_files():
     # else:
     #     print("No large instance found or ALB script deployed.")
 
+    #Update SSH Rule
+    update_ssh_rule(ec2, gatekeeper['PrivateIpAddress'])
+
 deploy_files() #TODO: Remove
     
-    
+#TODO: Specify the SSH IP permission only for the gatekeeper
