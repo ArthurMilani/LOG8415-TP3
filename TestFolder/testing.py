@@ -130,6 +130,31 @@ def get_ping(instance_dns):
     except Exception as e:
         print(f"Erro ao executar o ping: {e}")
         return float('inf')
+
+def get_running_instances(ec2_client):
+    filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
+    response = ec2_client.describe_instances(Filters=filters)
+    tag_to_list = {
+        'worker': [],
+        'manager': [],
+        'proxy': [],
+        'gatekeeper': [],
+        'trusted_machine': []
+    }
+    for reservation in response.get('Reservations', []):
+        for instance in reservation.get('Instances', []):
+            tag_value = next(
+                (tag['Value'] for tag in instance.get('Tags', []) if 'Value' in tag), 
+                None
+            )
+            if tag_value in tag_to_list:
+                tag_to_list[tag_value].append({
+                    'InstanceId': instance.get('InstanceId'),
+                    'InstanceType': instance.get('InstanceType'),
+                    'PublicDnsName': instance.get('PublicDnsName'),
+                    'PrivateIpAddress': instance.get('PrivateIpAddress')
+                })
+    return tag_to_list['worker'], tag_to_list['manager'], tag_to_list['proxy'], tag_to_list['gatekeeper'], tag_to_list['trusted_machine']
     
 # def get_ping(instance_dns):
 #     try:
@@ -145,3 +170,9 @@ def get_ping(instance_dns):
 # """
 # deploy_to_instance("ec2-18-213-4-237.compute-1.amazonaws.com")
 # get_ping("ec2-3-80-151-238.compute-1.amazonaws.com")
+worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(boto3.client('ec2', region_name=REGION))
+print(worker)
+print(manager)
+print(proxy)
+print(gatekeeper)
+print(trusted_machine)

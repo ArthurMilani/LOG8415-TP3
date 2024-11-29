@@ -5,16 +5,13 @@ import sys
 import boto3
 import subprocess
 import uvicorn
-import logging
 import requests
-import time
 import random
+
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-
 REGION = "us-east-1"
-
 # Create FastAPI app
 app = FastAPI()
 
@@ -26,42 +23,35 @@ class WriteRequest(BaseModel):
 
 @app.post("/write")
 def receive_write_request(write_request: WriteRequest):
-
     query = write_request.query
-
-    # Lista de comandos SQL permitidos
-    allowed_commands = ("insert", "update", "delete", "create", "drop", "use", "alter", "truncate")
-
-    # Dividir a query em comandos separados pelo ';'
-    statements = query.strip().lower().split(';')
-
-    # Validar cada comando
-    for statement in statements:
-        if statement.strip():  # Ignorar comandos vazios
-            command = statement.split()[0]  # Obter a primeira palavra (comando SQL)
-            if command not in allowed_commands:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Comando não permitido: {command}. Somente {', '.join(allowed_commands).upper()} são permitidos."
-                )
-
-
-    # Executar a query no banco master (manager)
+    # The first execution of the write request is done in the manager
     manager_dns = get_running_instances("manager")[0]['PublicDnsName']
     manager_response = send_write_request_master(query, "/write", manager_dns)
-
-    # Replicar a operação para os workers
+    # If the manager response is successful, the write request is replicated to the workers
     if manager_response["status"] == "success": 
         workers = get_running_instances("worker")
-        replication_status = replicate_write(query, "/write", workers)#TODO: try catch
+        replication_response = replicate_write(query, "/write", workers)
+        # If the replication is successful, the response is returned
+        if replication_response["status"] == "failed":
+            print("Replication failed")
+            raise HTTPException(
+                status_code=400,
+                detail="Replication failed: " + replication_response["message"]
+            )
     else:
-        replication_status = "failed" 
-
+        print("Manager response failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Manager response failed: " + manager_response["message"]
+        )
+    # If everything is successful, the response is returned
     return {
-        "manager_response": manager_response,
-        "replication_status": replication_status
+        "manager_response": "success",
+        "replication_status": "success"
     }
 
+
+#Write request to the manager
 def send_write_request_master(query, path, instance_dns):
     url = f"http://{instance_dns}:8000{path}"
     try:
@@ -70,48 +60,29 @@ def send_write_request_master(query, path, instance_dns):
         return response.json()
     except requests.RequestException as e:
         print(f"Error sending request to {instance_dns}: {e}")
-        return None
+        return {"status": "failed", "message": str(e)}
     
 
+#Replicate the write request to the workers
 def replicate_write(query, path, workers): 
-
     for worker in workers:
         url = f"http://{worker['PublicDnsName']}:8000{path}"
         try:
-            response = requests.post(url, json={"query": query})
+            requests.post(url, json={"query": query})
         except requests.RequestException as e:
             print(f"Error sending request to {worker['PublicDnsName']}: {e}")
-            return "failed"
+            return {"status": "failed", "message": str(e)}
 
-    return "success"
+    return {"status": "success"}
 
 
 #Read requests
-
 @app.get("/read")
 def receive_read_request(
     method: str = Query(..., description="Method of read (direct_hit, random, customized)"),
     query: str = Query(..., description="SQL query to execute")
     ):
-
-    # Validar se todos os comandos na query são SELECT
-    # Lista de comandos SQL permitidos
-    allowed_commands = ("select", "use", "show")
-
-    # Dividir a query em comandos separados pelo ';'
-    statements = query.strip().lower().split(';')
-
-    # Validar cada comando
-    for statement in statements:
-        if statement.strip():  # Ignorar comandos vazios
-            command = statement.split()[0]  # Obter a primeira palavra (comando SQL)
-            if command not in allowed_commands:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Comando não permitido: {command}. Somente {', '.join(allowed_commands).upper()} são permitidos."
-                )
-
-
+    #Select the method to be used according to the parameter
     if method == "direct_hit":
         return direct_hit(query)
     elif method == "random":
@@ -124,28 +95,43 @@ def receive_read_request(
             detail="Invalid method. Choose from: direct_hit, random, customized"
             )
 
+
+#Send the read request to the manager
 def direct_hit(query):
     print("Using Direct hit")
     instances = get_running_instances("manager")
     print(f"Instances: {instances}")
     responseJson = send_read_request(f"/read?query={query}", instances[0]['PublicDnsName'])
-    #TODO: Test
+    if responseJson["status"] == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail="Direct hit failed: " + responseJson["message"]
+        )
     return responseJson
 
+
+#Send the read request to a random worker
 def random_hit(query):
     print("Using Random")
     instances = get_running_instances("worker")
     num = random.randint(0, len(instances) - 1)
     responseJson = send_read_request(f"/read?query={query}", instances[num]['PublicDnsName'])
-
+    if responseJson["status"] == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail="Random hit failed: " + responseJson["message"]
+        )
     return responseJson
 
+
+#Send the read request to the worker with the lowest ping
 def customized(query):
     instances = get_running_instances("worker")
     print("Using Customized")
     best_ping = 10000
     ping = 0
     best_instance = None
+    #Getting the ping of each worker
     for instance in instances:
         ping = get_ping(instance['PublicDnsName'])
         print(f"ping: {ping}, instance: {instance['InstanceId']}")
@@ -153,18 +139,22 @@ def customized(query):
             best_ping = ping
             best_instance = instance
     print(f"Best instance: {best_instance['InstanceId']}")
-
     responseJson = send_read_request(f"/read?query={query}", best_instance['PublicDnsName'])
-
+    if responseJson["status"] == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail="Customized failed: " + responseJson["message"]
+        )
     return responseJson
 
 
+#Get the running instances with the specified tag
 def get_running_instances(tag):
     ec2_client = boto3.client('ec2', region_name=REGION)
     filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
     response = ec2_client.describe_instances(Filters=filters)
     instances_info = []
-
+    #Filter the instances with the specified tag
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
             if instance['Tags'][0]['Value'] == tag:
@@ -176,6 +166,8 @@ def get_running_instances(tag):
                 })
     return instances_info
 
+
+#Send the read request to the specified instance
 def send_read_request(path, instance_dns):
     url = f"http://{instance_dns}:8000{path}"
     try:
@@ -183,30 +175,29 @@ def send_read_request(path, instance_dns):
         return response.json()
     except requests.RequestException as e:
         print(f"Error sending request to {instance_dns}: {e}")
-        return None
+        return {"status": "failed", "message": str(e)}
     
-#TODO: Test the new craation of the security group with the new rules
+
+#TODO: Test the new creation of the security group with the new rules
+#Get the ping of the instance
 def get_ping(instance_dns):
     try:
-        # Executa o comando ping
+        # Execute the ping command
         result = subprocess.run(
-            ["ping", "-c", "1", "-W", "10", instance_dns],  # -c: Número de pacotes; -W: Timeout em segundos
+            ["ping", "-c", "1", "-W", "10", instance_dns],  # -c: Package number; -W: Timeout
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
         if result.returncode == 0:
-            # Processa a saída para obter o tempo de ping
+            # Get the time from the result
             for line in result.stdout.split("\n"):
                 if "time=" in line:
                     result = float(line.split("time=")[1].split(" ")[0])
-                    return result  # Extrai o tempo em milissegundos
+                    return result 
         else:
-            print(f"Erro ao pingar {instance_dns}: {result.stderr.strip()}")
+            print(f"Ping error to {instance_dns}: {result.stderr.strip()}")
             return float('inf')
     except Exception as e:
-        print(f"Erro ao executar o ping: {e}")
+        print(f"Error trying to execute ping: {e}")
         return float('inf')
-
-    
-

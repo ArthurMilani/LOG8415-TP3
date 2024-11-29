@@ -3,30 +3,27 @@ from pydantic import BaseModel
 from pathlib import Path
 import sys
 import boto3
-import subprocess
 import uvicorn
-import logging
 import requests
-import time
-import random
+import re
+
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-
 REGION = "us-east-1"
-
 # Create FastAPI app
 app = FastAPI()
+
 
 #Write requests
 class WriteRequest(BaseModel):
     query: str
 
+
+#Receive write requests from the internet
 @app.post("/write")
 def receive_write_request(write_request: WriteRequest):
-
     query = write_request.query
-
     validation_result = write_validations(query)
     if validation_result == "validated":
         json = {"query": query, "method": "write"}
@@ -37,15 +34,15 @@ def receive_write_request(write_request: WriteRequest):
             status_code=400,
             detail="Validation failed"
         )
-
     return response
 
+
+#Receive read requests from the internet
 @app.get("/read")
 def receive_read_request(
     method: str = Query(..., description="Method of read (direct_hit, random, customized)"),
     query: str = Query(..., description="SQL query to execute")
     ):
-
     validation_result = read_validations(query, method)
     if validation_result == "validated":
         json = {"query": query, "method": method}
@@ -56,45 +53,66 @@ def receive_read_request(
             status_code=400,
             detail="Validation failed"
         )
-
     return response
 
 
+# Validate write requests
 def write_validations(query):
-    #TODO: Implement validations
+    allowed_commands = ("insert", "update", "delete", "create", "drop") #Allowed commands for write
+    statement = query.strip().lower()
+    if statement.strip():  # Ignore empty commands
+        command = statement.split()[0]  # Get the first word (SQL command)
+        if command not in allowed_commands:
+            return "not validated"
+    if sql_injection_validation(query):
+        return "not validated"
     return "validated"
 
 
-def read_validations(query):
-    #TODO: Implement validations
+# Validate read requests
+def read_validations(query, method):
+    allowed_commands = ("select", "use", "show") #Allowed commands for read
+    statement = query.strip().lower()
+    if statement.strip():  # Ignore empty commands
+        command = statement.split()[0]  # Get the first word (SQL command)
+        if command not in allowed_commands:
+            return "not validated"
+    if sql_injection_validation(query):
+        return "not validated"
     return "validated"
 
-#DELETE this one
-def send_read_request(path, instance_dns):
-    url = f"http://{instance_dns}:8000{path}"
-    try:
-        response = requests.get(url)
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Error sending request to {instance_dns}: {e}")
-        return None
 
+#Check for SQL Injection patterns
+def sql_injection_validation(query):
+    suspect_patterns = [
+        r"(\||&&|\|\||>|<|\$|\`)",  #Suspect characters
+        r"(--|;|#)",                #Comments  
+        r"(\'.*?(=|or|and))",       #Condition manipulation
+        r"(rm|ls|cat|echo|mkdir|wget|curl|chmod|chown|sudo)" #Shell commands
+    ]   
+    for padrao in suspect_patterns:
+        if re.search(padrao, query, re.IGNORECASE):
+            return True
+    return False
+
+
+# Send request to the trusted machine
 def send_request(json, instance_dns):
     url = f"http://{instance_dns}:8000/call_trusted_machine"
     try:
         response = requests.post(url, json=json) # json={"query": query}
-    
         return response.json()
     except requests.RequestException as e:
         print(f"Error sending request to {instance_dns}: {e}")
-        return None
+        return {"status": "failed", "message": str(e)}
 
+
+# Get running instances, in this case, the trusted machine TODO: Can be improved
 def get_running_instances(tag = "trusted_machine"):
     ec2_client = boto3.client('ec2', region_name=REGION)
     filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
     response = ec2_client.describe_instances(Filters=filters)
     instances_info = []
-
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
             if instance['Tags'][0]['Value'] == tag:

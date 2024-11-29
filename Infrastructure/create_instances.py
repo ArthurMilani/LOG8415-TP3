@@ -6,9 +6,10 @@ import os
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
+from constants import KEY_PAIR_NAME, REGION, SECURITY_GROUP_NAME, GATEKEEPER_IPCONFIG, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG, MICRO_INSTANCE, LARGE_INSTANCE
 
-from constants import KEY_PAIR_NAME, LARGE_INSTANCE_TYPE, MICRO_INSTANCE_TYPE, REGION, SECURITY_GROUP_NAME, GATEKEEPER_IPCONFIG, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG, MICRO_INSTANCE, LARGE_INSTANCE
 
+# Count the number of currently running instances
 def count_running_instances(ec2_client):
     """Count the number of currently running instances."""
     try:
@@ -22,7 +23,8 @@ def count_running_instances(ec2_client):
         print(f"Error retrieving running instances: {e}")
         return 0
 
-# Create Key Pair
+
+# Create Key Pair for SSH access
 def create_key_pair(ec2_client):
     try:
         response_key_pair = ec2_client.create_key_pair(KeyName=KEY_PAIR_NAME)
@@ -38,15 +40,15 @@ def create_key_pair(ec2_client):
         os.chmod(key_file_path, 0o400)
         return KEY_PAIR_NAME
     except ClientError as e:
-
         if "InvalidKeyPair.Duplicate" in str(e):
             print(f"Key pair '{KEY_PAIR_NAME}' already exists.")
             return KEY_PAIR_NAME
         else:
             print(f"Error creating key pair: {e}")
             return None
+        
 
-# Create Security Group
+# Create Security Group if it does not already exist
 def create_security_group(ec2_client, security_group_name, ip_config):
     try:
         response_security_group = ec2_client.create_security_group(
@@ -57,7 +59,6 @@ def create_security_group(ec2_client, security_group_name, ip_config):
 
         # Authorize Security Group Ingress
         ec2_client.authorize_security_group_ingress(GroupId=security_group_id, IpPermissions=ip_config)
-
         return security_group_id
     
     except ClientError as e:
@@ -66,7 +67,9 @@ def create_security_group(ec2_client, security_group_name, ip_config):
         else:
             print(f"Error creating security group: {e}")
             security_group_id = None
-            
+
+
+# Get existing security group if it already exists
 def get_existing_security_group(ec2_client, security_group_name):
     try:
         response = ec2_client.describe_security_groups(
@@ -80,6 +83,8 @@ def get_existing_security_group(ec2_client, security_group_name):
         print(f"Error retrieving existing security group: {describe_error}")
         security_group_id = None
 
+
+#Launching all the instances if they are not already running
 def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
     # Check the number of running instances
     if count_running_instances(ec2_client) >= 6:
@@ -93,10 +98,6 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
     large_instance["SecurityGroupIds"] = [security_group_id]
     instance_params_micro = micro_instance
     instance_params_large = large_instance
-
-    #TODO: Creation of trusted instances
-
-    #TODO: Launch trusted instances
 
     # Launch EC2 Instances
     try:
@@ -132,26 +133,25 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
             print(f"Key pair: {KEY_PAIR_NAME}, security group: {security_group_id}, instance_params_micro: {instance_params_micro}")
             print("Skipping t2.micro instance launch due to missing key pair or security group.")
 
-        # Launch t2.large instances
+        # Launch t2.large instances, specifying the security group and tag
         if instance_params_large["KeyName"] and instance_params_large["SecurityGroupIds"]:
             # Launch proxy
             response_large = ec2_client.run_instances(**instance_params_large)
             instance_ids_large = [instance["InstanceId"] for instance in response_large["Instances"]]
-            print(f"Launched EC2 t2.large instances with IDs: {instance_ids_large}")
+            print(f"Launched EC2 t2.large proxy instances with ID: {instance_ids_large}")
 
-            # Wait for the t2.large instances to be in the 'running' state
+            # Wait for the proxy instance to be in the 'running' state
             print("Waiting for t2.large instances to be running...")
             waiter.wait(InstanceIds=instance_ids_large)
             print("t2.large instances are now running.")
 
             #Launch gatekeeper
             instance_params_large["TagSpecifications"] = [{'ResourceType': 'instance', 'Tags': [{'Key': 'Role', 'Value': 'gatekeeper'}]}]
-
             response_large = ec2_client.run_instances(**instance_params_large)
             instance_ids_large = [instance["InstanceId"] for instance in response_large["Instances"]]
             print(f"Launched EC2 t2.large gatekeeper instance with IDs: {instance_ids_large}")
 
-            # Wait for the t2.large gatekeeper instance to be in the 'running' state
+            # Wait for the gatekeeper instance to be in the 'running' state
             print("Waiting for t2.large gatekeeper instance to be running...")
             waiter.wait(InstanceIds=instance_ids_large)
             print("t2.large gatekeeper instance is now running.")
@@ -159,19 +159,15 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
             # Launch Trusted Machine
             instance_params_large["SecurityGroupIds"] = [trusted_security_group_id]
             instance_params_large["TagSpecifications"] = [{'ResourceType': 'instance', 'Tags': [{'Key': 'Role', 'Value': 'trusted_machine'}]}]
-
             response_large = ec2_client.run_instances(**instance_params_large)
             gatekeeper_instance = response_large["Instances"][0]
             instance_ids_large = [instance["InstanceId"] for instance in response_large["Instances"]]
-
             print(f"Launched EC2 t2.large trusted machine instance with IDs: {instance_ids_large}")
 
             # Wait for the t2.large trusted machine instance to be in the 'running' state
             print("Waiting for t2.large trusted machine instance to be running...")
             waiter.wait(InstanceIds=instance_ids_large)
             print("t2.large trusted machine instance is now running.")
-
-            #update_security_group(ec2_client, security_group_id, gatekeeper_instance["PublicIpAddress"])
 
         else:
             print(f"Key pair: {KEY_PAIR_NAME}, security group: {security_group_id}, instance_params_large: {instance_params_large}")
@@ -181,7 +177,8 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
         print(f"Error launching instances: {e}")
 
 
-def update_security_group(ec2_client):
+# Update the security groups to allow deployment and to run the commands
+def update_security_groups(ec2_client):
     try:
         response = ec2_client.describe_security_groups(
                 Filters=[{"Name": "group-name", "Values": [TRUSTED_SECURITY_GROUP_NAME]}]
@@ -203,13 +200,17 @@ def update_security_group(ec2_client):
         if ip_permissions.__len__() > 0:
             response = ec2_client.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=ip_permissions)
 
-
+        #Get the gatekeeper IP to allow the HTTP requests
         gatekeeper_ip = get_running_instances("gatekeeper", ec2_client)[0]["PrivateIpAddress"]
+        #Get the proxy IP to allow the SSH requests
+        proxy_ip = get_running_instances("proxy", ec2_client)[0]["PrivateIpAddress"]
+        #Get the trusted machine IP to allow the HTTP requests
+        trusted_machine_ip = get_running_instances("trusted_machine", ec2_client)[0]["PrivateIpAddress"]
 
         response = ec2_client.authorize_security_group_ingress(
                 GroupId=sg_id,
                 IpPermissions=[
-                    {
+                    {   # Allow SSH from the everywhere only to allow the deployment and to run the commands
                         'IpProtocol': 'tcp',
                         'FromPort': 22,
                         'ToPort': 22,
@@ -221,7 +222,7 @@ def update_security_group(ec2_client):
                     #     'ToPort': -1,
                     #     'IpRanges': [{'CidrIp':  f'{gatekeeper_ip}/32'}]
                     # },
-                    {
+                    {   # Allow HTTP from the gatekeeper
                         'IpProtocol': 'tcp',
                         'FromPort': 8000,
                         'ToPort': 8000,
@@ -263,11 +264,10 @@ def create_instances():
     # Create Trusted Security Group
     trusted_security_group_id = create_security_group(ec2_client, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG)
 
-    # Launch EC2 Instances
+    # Launch EC2 Instances and Update the Security Groups IP Permissions
     if key_pair_name and security_group_id and trusted_security_group_id:
-        # Launch EC2 Instances
         launch_instances(ec2_client, security_group_id, trusted_security_group_id)
-        update_security_group(ec2_client)
+        update_security_groups(ec2_client)
         
 create_instances()
         
