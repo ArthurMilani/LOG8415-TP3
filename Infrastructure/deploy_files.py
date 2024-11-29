@@ -7,58 +7,7 @@ from scp import SCPClient
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-
-
-from constants import AWS_CREDENTIALS_FILE, PRIVATE_KEY_FILE, REGION, REMOTE_APP_PATH, REMOTE_AWS_CREDENTIALS_PATH, LOCAL_WORKER_PATH, LOCAL_MANAGER_PATH, LOCAL_PROXY_PATH, TRUSTED_SECURITY_GROUP_NAME, LOCAL_TRUSTED_PATH, LOCAL_GATEKEEPER_PATH
-
-# def get_running_instances(ec2_client):
-#     filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
-#     response = ec2_client.describe_instances(Filters=filters)
-#     workers = []
-#     managers = []
-#     proxies = []
-#     gatekeepers = []
-#     trusteds = []
-
-#     for reservation in response['Reservations']:
-#         for instance in reservation['Instances']:
-#             if instance['Tags'][0]['Value'] == 'worker':
-#                 workers.append({
-#                     'InstanceId': instance['InstanceId'],
-#                     'InstanceType': instance['InstanceType'],
-#                     'PublicDnsName': instance['PublicDnsName'],
-#                     'PrivateIpAddress': instance['PrivateIpAddress']
-#                 })
-#             elif instance['Tags'][0]['Value'] == 'manager':
-#                 managers.append({
-#                     'InstanceId': instance['InstanceId'],
-#                     'InstanceType': instance['InstanceType'],
-#                     'PublicDnsName': instance['PublicDnsName'],
-#                     'PrivateIpAddress': instance['PrivateIpAddress']
-#                 })
-#             elif instance['Tags'][0]['Value'] == 'proxy':
-#                 proxies.append({
-#                     'InstanceId': instance['InstanceId'],
-#                     'InstanceType': instance['InstanceType'],
-#                     'PublicDnsName': instance['PublicDnsName'],
-#                     'PrivateIpAddress': instance['PrivateIpAddress']
-#                 })
-#             elif instance['Tags'][0]['Value'] == 'gatekeeper':
-#                 gatekeepers.append ({
-#                     'InstanceId': instance['InstanceId'],
-#                     'InstanceType': instance['InstanceType'],
-#                     'PublicDnsName': instance['PublicDnsName'],
-#                     'PrivateIpAddress': instance['PrivateIpAddress']
-#                 })
-#             elif instance['Tags'][0]['Value'] == 'trusted_machine':
-#                 trusteds.append({
-#                     'InstanceId': instance['InstanceId'],
-#                     'InstanceType': instance['InstanceType'],
-#                     'PublicDnsName': instance['PublicDnsName'],
-#                     'PrivateIpAddress': instance['PrivateIpAddress']
-#                 })
-            
-#     return workers, managers, proxies, gatekeepers, trusteds
+from constants import AWS_CREDENTIALS_FILE, PRIVATE_KEY_FILE, REGION, REMOTE_APP_PATH, REMOTE_AWS_CREDENTIALS_PATH, LOCAL_WORKER_PATH, LOCAL_MANAGER_PATH, LOCAL_PROXY_PATH, TRUSTED_SECURITY_GROUP_NAME, CLUSTER_SECURITY_GROUP_NAME, LOCAL_TRUSTED_PATH, LOCAL_GATEKEEPER_PATH
 
 
 #Get all running instances relevant data
@@ -204,7 +153,7 @@ def deploy_to_instance(instance_dns):
 
 
 # Update the SSH rule to allow traffic only from the selected instances
-def update_ssh_rule(ec2_client, gatekeeper_ip):
+def update_ssh_rules(ec2_client, gatekeeper_ip, trusted_machine_ip, proxy_ip):
     try:
         response = ec2_client.describe_security_groups(
                 Filters=[{"Name": "group-name", "Values": [TRUSTED_SECURITY_GROUP_NAME]}]
@@ -229,6 +178,32 @@ def update_ssh_rule(ec2_client, gatekeeper_ip):
                     'FromPort': 22,
                     'ToPort': 22,
                     'IpRanges': [{'CidrIp': f"{gatekeeper_ip}/32"}]
+                }
+            ]
+        )
+        response = ec2_client.describe_security_groups(
+            Filters=[{"Name": "group-name", "Values": [CLUSTER_SECURITY_GROUP_NAME]}]
+        )
+        sg_ip = response["SecurityGroups"][0]["GroupId"]
+        ec2_client.revoke_security_group_ingress(
+            GroupId=sg_ip,
+            IpPermissions=[
+                    {
+                        'IpProtocol': 'tcp',
+                        'FromPort': 22,
+                        'ToPort': 22,
+                        'IpRanges': [{'CidrIp': "0.0.0.0/0"}]
+                    }
+            ]
+        )
+        ec2_client.authorize_security_group_ingress(
+            GroupId=sg_ip,
+            IpPermissions=[
+                {
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'IpRanges': [{'CidrIp': f'{trusted_machine_ip}/32'}, {'CidrIp': f'{proxy_ip}/32'}]
                 }
             ]
         )
@@ -270,6 +245,6 @@ def deploy_files():
         deploy_script_via_scp(gatekeeper['PublicDnsName'], "gatekeeper", LOCAL_GATEKEEPER_PATH)
 
     #Update SSH Rule for trusted machine and cluster
-    update_ssh_rule(ec2, gatekeeper['PrivateIpAddress'])
+    update_ssh_rules(ec2, gatekeeper['PrivateIpAddress'], trusted_machine['PrivateIpAddress'], proxy['PrivateIpAddress'])
 
 deploy_files() #TODO: Remove

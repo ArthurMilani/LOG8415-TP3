@@ -6,7 +6,7 @@ import os
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-from constants import KEY_PAIR_NAME, REGION, SECURITY_GROUP_NAME, GATEKEEPER_IPCONFIG, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG, MICRO_INSTANCE, LARGE_INSTANCE
+from constants import KEY_PAIR_NAME, REGION, SECURITY_GROUP_NAME, GATEKEEPER_IPCONFIG, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG, MICRO_INSTANCE, LARGE_INSTANCE, CLUSTER_SECURITY_GROUP_NAME, CLUSTER_IPCONFIG
 
 
 # Count the number of currently running instances
@@ -49,16 +49,17 @@ def create_key_pair(ec2_client):
         
 
 # Create Security Group if it does not already exist
-def create_security_group(ec2_client, security_group_name, ip_config):
+def create_security_group(ec2_client, security_group_name):
     try:
         response_security_group = ec2_client.create_security_group(
             GroupName=security_group_name, Description="Security group for TP3 EC2 instance"
         )
         security_group_id = response_security_group["GroupId"]
-        print(f"Security Group ({security_group_id}) created: {security_group_id}")
+        print(f"Security Group ({security_group_name}) created: {security_group_id}")
 
-        # Authorize Security Group Ingress
-        ec2_client.authorize_security_group_ingress(GroupId=security_group_id, IpPermissions=ip_config)
+        # Set ingress rules for the gatekeeper 
+        if security_group_name == SECURITY_GROUP_NAME:
+            ec2_client.authorize_security_group_ingress(GroupId=security_group_id, IpPermissions=GATEKEEPER_IPCONFIG)
         return security_group_id
     
     except ClientError as e:
@@ -85,7 +86,7 @@ def get_existing_security_group(ec2_client, security_group_name):
 
 
 #Launching all the instances if they are not already running
-def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
+def launch_instances(ec2_client, security_group_id, trusted_security_group_id, cluster_security_group_id):
     # Check the number of running instances
     if count_running_instances(ec2_client) >= 6:
         print("Skipping instance launch: already 6 instances are running.")
@@ -94,8 +95,8 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
     # Parameters for EC2 Instances
     micro_instance = MICRO_INSTANCE
     large_instance = LARGE_INSTANCE
-    micro_instance["SecurityGroupIds"] = [security_group_id]
-    large_instance["SecurityGroupIds"] = [security_group_id]
+    micro_instance["SecurityGroupIds"] = [cluster_security_group_id]
+    large_instance["SecurityGroupIds"] = [cluster_security_group_id]
     instance_params_micro = micro_instance
     instance_params_large = large_instance
 
@@ -146,6 +147,7 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
             print("t2.large instances are now running.")
 
             #Launch gatekeeper
+            instance_params_large["SecurityGroupIds"] = [security_group_id]
             instance_params_large["TagSpecifications"] = [{'ResourceType': 'instance', 'Tags': [{'Key': 'Role', 'Value': 'gatekeeper'}]}]
             response_large = ec2_client.run_instances(**instance_params_large)
             instance_ids_large = [instance["InstanceId"] for instance in response_large["Instances"]]
@@ -160,7 +162,6 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
             instance_params_large["SecurityGroupIds"] = [trusted_security_group_id]
             instance_params_large["TagSpecifications"] = [{'ResourceType': 'instance', 'Tags': [{'Key': 'Role', 'Value': 'trusted_machine'}]}]
             response_large = ec2_client.run_instances(**instance_params_large)
-            gatekeeper_instance = response_large["Instances"][0]
             instance_ids_large = [instance["InstanceId"] for instance in response_large["Instances"]]
             print(f"Launched EC2 t2.large trusted machine instance with IDs: {instance_ids_large}")
 
@@ -178,10 +179,10 @@ def launch_instances(ec2_client, security_group_id, trusted_security_group_id):
 
 
 # Update the security groups to allow deployment and to run the commands
-def update_security_groups(ec2_client):
+def update_security_groups(ec2_client, security_group_name):
     try:
         response = ec2_client.describe_security_groups(
-                Filters=[{"Name": "group-name", "Values": [TRUSTED_SECURITY_GROUP_NAME]}]
+                Filters=[{"Name": "group-name", "Values": [security_group_name]}]
             )
         sg = response["SecurityGroups"][0]
         sg_id = sg["GroupId"]
@@ -207,30 +208,46 @@ def update_security_groups(ec2_client):
         #Get the trusted machine IP to allow the HTTP requests
         trusted_machine_ip = get_running_instances("trusted_machine", ec2_client)[0]["PrivateIpAddress"]
 
-        response = ec2_client.authorize_security_group_ingress(
-                GroupId=sg_id,
-                IpPermissions=[
-                    {   # Allow SSH from the everywhere only to allow the deployment and to run the commands
-                        'IpProtocol': 'tcp',
-                        'FromPort': 22,
-                        'ToPort': 22,
-                        'IpRanges': [{'CidrIp': "0.0.0.0/0"}]
-                    },
-                    # { #TODO: Remove this (only for pings)
-                    #     'IpProtocol': 'icmp',
-                    #     'FromPort': -1,
-                    #     'ToPort': -1,
-                    #     'IpRanges': [{'CidrIp':  f'{gatekeeper_ip}/32'}]
-                    # },
-                    {   # Allow HTTP from the gatekeeper
-                        'IpProtocol': 'tcp',
-                        'FromPort': 8000,
-                        'ToPort': 8000,
-                        'IpRanges': [{'CidrIp': f'{gatekeeper_ip}/32'}]
-                    }
-                ]
-        )
-        print(f"Security Group ({sg_id}) updated")
+        final_ip_permissions = []
+        if security_group_name == TRUSTED_SECURITY_GROUP_NAME:
+            final_ip_permissions = [
+                {   # Allow SSH from the everywhere only to allow the deployment and to run the commands
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'IpRanges': [{'CidrIp': "0.0.0.0/0"}]
+                },
+                {   # Allow HTTP from the gatekeeper
+                    'IpProtocol': 'tcp',
+                    'FromPort': 8000,
+                    'ToPort': 8000,
+                    'IpRanges': [{'CidrIp': f'{gatekeeper_ip}/32'}]
+                }
+            ]
+        elif security_group_name == CLUSTER_SECURITY_GROUP_NAME:
+            final_ip_permissions = [
+                {   # Allow SSH from the everywhere only to allow the deployment and to run the commands
+                    'IpProtocol': 'tcp',
+                    'FromPort': 22,
+                    'ToPort': 22,
+                    'IpRanges': [{'CidrIp': "0.0.0.0/0"}]
+                },
+                {   # Allow pings from the proxy
+                    'IpProtocol': 'icmp',
+                    'FromPort': -1,
+                    'ToPort': -1,
+                    'IpRanges': [{'CidrIp': f'{proxy_ip}/32'}]
+                },
+                {   # Allow HTTP from the trusted machine and proxy
+                    'IpProtocol': 'tcp',
+                    'FromPort': 8000,
+                    'ToPort': 8000,
+                    'IpRanges': [{'CidrIp': f'{trusted_machine_ip}/32'}, {'CidrIp': f'{proxy_ip}/32'}]
+                }
+            ]
+
+        response = ec2_client.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=final_ip_permissions)
+        print(f"Security Group ({security_group_name}) updated")
     
     except Exception as e:
         print(f"Erro ao atualizar o Security Group: {e}")
@@ -259,15 +276,19 @@ def create_instances():
     key_pair_name = create_key_pair(ec2_client)
 
     # Create Security Group
-    security_group_id = create_security_group(ec2_client, SECURITY_GROUP_NAME, GATEKEEPER_IPCONFIG)
+    security_group_id = create_security_group(ec2_client, SECURITY_GROUP_NAME)
 
     # Create Trusted Security Group
-    trusted_security_group_id = create_security_group(ec2_client, TRUSTED_SECURITY_GROUP_NAME, TRUSTED_IPCONFIG)
+    trusted_security_group_id = create_security_group(ec2_client, TRUSTED_SECURITY_GROUP_NAME)
+
+    # Create Cluster Security Group
+    cluster_security_group_id = create_security_group(ec2_client, CLUSTER_SECURITY_GROUP_NAME)
 
     # Launch EC2 Instances and Update the Security Groups IP Permissions
     if key_pair_name and security_group_id and trusted_security_group_id:
-        launch_instances(ec2_client, security_group_id, trusted_security_group_id)
-        update_security_groups(ec2_client)
+        launch_instances(ec2_client, security_group_id, trusted_security_group_id, cluster_security_group_id)
+        update_security_groups(ec2_client, TRUSTED_SECURITY_GROUP_NAME)
+        update_security_groups(ec2_client, CLUSTER_SECURITY_GROUP_NAME)
         
 create_instances()
         

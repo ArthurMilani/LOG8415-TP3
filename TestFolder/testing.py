@@ -170,9 +170,10 @@ def get_running_instances(ec2_client):
 # """
 # deploy_to_instance("ec2-18-213-4-237.compute-1.amazonaws.com")
 # get_ping("ec2-3-80-151-238.compute-1.amazonaws.com")
-worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(boto3.client('ec2', region_name=REGION))
-print(worker)
-print(manager)
-print(proxy)
-print(gatekeeper)
-print(trusted_machine)
+# worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(boto3.client('ec2', region_name=REGION))
+# print(worker)
+# print(manager)
+# print(proxy)
+# print(gatekeeper)
+# print(trusted_machine)
+
