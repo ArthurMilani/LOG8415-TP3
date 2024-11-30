@@ -70,7 +70,6 @@ def deploy_script_via_scp(instance_dns, file_type, local_app_path, gatekeeper_ip
 
 # Run commands on the remote instance to install dependencies and run the app
 def run_remote_commands(ssh, file_type, gatekeeper_ip):
-    """Run commands on the remote instance to install dependencies and run the app."""
     commands = []
     if file_type == "worker" or file_type == "manager":
         commands = [
@@ -81,6 +80,7 @@ def run_remote_commands(ssh, file_type, gatekeeper_ip):
             "sudo mysql -u root -e 'CREATE DATABASE sakila;'",
             "sudo mysql -u root sakila < sakila-db/sakila-schema.sql",
             "sudo mysql -u root sakila < sakila-db/sakila-data.sql",
+            "sudo apt-get install sysbench -y",
             "sudo apt install python3 python3-pip -y",
             "sudo apt install -y python3-uvicorn",
             "sudo apt install -y python3-fastapi",
@@ -107,11 +107,7 @@ def run_remote_commands(ssh, file_type, gatekeeper_ip):
             "sudo apt-get install -y python3-boto3",
             "kill -9 $(lsof -t -i :8000)",
             f"python3 -m uvicorn {file_type}:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &",
-            # f"sudo iptables -A INPUT -p tcp --dport 8000 -s {gatekeeper_ip} -j ACCEPT", # Allow traffic from gatekeeper
-            # f"sudo iptables -A INPUT -p tcp --dport 22 -s {gatekeeper_ip} -j ACCEPT", # Allow SSH traffic
-            # "sudo iptables -A INPUT -p icmp -j ACCEPT", # Allow ICMP traffic for console TODO:REMOVE
-            # "sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", # Allow established connections
-            # "sudo iptables -A INPUT -j DROP", # Drop all other traffic TODO: Uncomment
+
         ]
     #Execute the commands
     for command in commands:
@@ -150,6 +146,48 @@ def deploy_to_instance(instance_dns):
         print(f"Failed to deploy on {instance_dns}: {str(e)}")
     finally:
         ssh.close()
+
+
+#Deploy the files to the right instances.
+#In some cases, we also deploy the AWS credentials and update the security group rules
+def deploy_files():
+    ec2 = boto3.client('ec2', region_name=REGION)
+    # Get all running instances
+    workers, managers, proxies, gatekeepers, trusteds = get_running_instances(ec2_client=ec2)
+
+    for worker in workers:
+        print (f"Deploying to worker instance: {worker['PublicDnsName']}")
+        deploy_script_via_scp(worker['PublicDnsName'], "worker", LOCAL_WORKER_PATH)
+        
+    for manager in managers:
+        print (f"Deploying to manager instance: {manager['PublicDnsName']}")
+        deploy_script_via_scp(manager['PublicDnsName'], "manager", LOCAL_MANAGER_PATH)
+
+    for proxy in proxies:
+        print(f"Deploying Proxy Credentials to large instance: {proxy['PublicDnsName']}")
+        deploy_to_instance(proxy['PublicDnsName'])
+        print (f"Deploying to proxy instance: {proxy['PublicDnsName']}")
+        deploy_script_via_scp(proxy['PublicDnsName'], "proxy", LOCAL_PROXY_PATH)
+
+    for trusted_machine in trusteds:
+        print(f"Deploying Trusted Machine Credentials to large instance: {trusted_machine['PublicDnsName']}")
+        deploy_to_instance(trusted_machine['PublicDnsName'])
+        print(f"Deploying to trusted machine instance: {trusted_machine['PublicDnsName']}")
+        deploy_script_via_scp(trusted_machine['PublicDnsName'], "trusted_machine", LOCAL_TRUSTED_PATH, gatekeepers[0]['PrivateIpAddress'])
+
+    for gatekeeper in gatekeepers:
+        print(f"Deploying Gatekeeper Credentials to large instance: {gatekeeper['PublicDnsName']}")
+        deploy_to_instance(gatekeeper['PublicDnsName'])
+        print(f"Deploying to gatekeeper instance: {gatekeeper['PublicDnsName']}")
+        deploy_script_via_scp(gatekeeper['PublicDnsName'], "gatekeeper", LOCAL_GATEKEEPER_PATH)
+    
+    instances = [workers[0]['PublicDnsName'], workers[1]['PublicDnsName'], managers[0]['PublicDnsName']]
+    update_ssh_data = [ec2, gatekeeper['PrivateIpAddress'], trusted_machine['PrivateIpAddress'], proxy['PrivateIpAddress']]
+    #perform_sysbench_benchmarks(instances)
+    #Update SSH Rule for trusted machine and cluster
+    #update_ssh_rules()
+
+    return gatekeeper['PublicDnsName'], instances, update_ssh_data
 
 
 # Update the SSH rule to allow traffic only from the selected instances
@@ -207,44 +245,116 @@ def update_ssh_rules(ec2_client, gatekeeper_ip, trusted_machine_ip, proxy_ip):
                 }
             ]
         )
+        print("Successfully updated SSH rules")
     except Exception as e:
         print(f"Failed to update SSH rule: {e}")
 
 
-#Deploy the files to the right instances.
-#In some cases, we also deploy the AWS credentials and update the security group rules
-def deploy_files():
+#Perform sysbench benchmarks on the instances
+def perform_sysbench_benchmarks(instances_dns):
+    for instance_dns in instances_dns:
+        ssh = create_ssh_client(instance_dns)
+        print("----------------------------------------")
+        print(f"Now performing sysbench benchmarks on {instance_dns}")
+        print("----------------------------------------")
+        commands = [
+            "sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user=root prepare",
+            "sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user=root run",
+            "sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user=root cleanup"
+        ]
+        for command in commands:
+            print(f"Executing: {command}")
+            stdin, stdout, stderr = ssh.exec_command(command)
+            #print(stderr.read().decode())
+            print(stdout.read().decode())
+        ssh.close()
+
+def set_ip_table_rules():
     ec2 = boto3.client('ec2', region_name=REGION)
-    # Get all running instances
-    workers, managers, proxies, gatekeepers, trusteds = get_running_instances(ec2_client=ec2)
+    worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(ec2)
+    instances = [worker[0], worker[1], manager[0], proxy[0], trusted_machine[0]]
 
-    for worker in workers:
-        print (f"Deploying to worker instance: {worker['PublicDnsName']}")
-        deploy_script_via_scp(worker['PublicDnsName'], "worker", LOCAL_WORKER_PATH)
-        
-    for manager in managers:
-        print (f"Deploying to manager instance: {manager['PublicDnsName']}")
-        deploy_script_via_scp(manager['PublicDnsName'], "manager", LOCAL_MANAGER_PATH)
+    for instance in instances:
+        try:
+            ssh = create_ssh_client(instance['PublicDnsName'])
+            commands = []
+            if instance['InstanceId'] == worker[0]['InstanceId'] or instance['InstanceId'] == worker[1]['InstanceId']:
+                commands = [
+                    "sudo iptables -A INPUT -p tcp --sport 8000 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 443 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A INPUT -p icmp --icmp-type 8 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 8000 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p icmp --icmp-type 0 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -j DROP",
+                    "sudo iptables -A INPUT -j DROP"  
+                ]
+            elif instance['InstanceId'] == proxy[0]['InstanceId']:
+                commands = [
+                    "sudo iptables -A INPUT -p tcp --sport 8000 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 443 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A INPUT -p icmp --icmp-type 0 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 8000 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p icmp --icmp-type 8 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -j DROP",
+                    "sudo iptables -A INPUT -j DROP"
+                ]
 
-    for proxy in proxies:
-        print(f"Deploying Proxy Credentials to large instance: {proxy['PublicDnsName']}")
-        deploy_to_instance(proxy['PublicDnsName'])
-        print (f"Deploying to proxy instance: {proxy['PublicDnsName']}")
-        deploy_script_via_scp(proxy['PublicDnsName'], "proxy", LOCAL_PROXY_PATH)
+            elif instance['InstanceId'] == manager[0]['InstanceId'] or instance['InstanceId'] == trusted_machine[0]['InstanceId']:
+                commands = [
+                    "sudo iptables -A INPUT -p tcp --sport 8000 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 443 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 53 -j ACCEPT",
+                    "sudo iptables -A INPUT -p tcp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A INPUT -p udp --sport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 8000 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p tcp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -p udp --dport 32768:60999 -j ACCEPT",
+                    "sudo iptables -A OUTPUT -j DROP",
+                    "sudo iptables -A INPUT -j DROP"
+                ]
+            for command in commands:
+                print(f"Executing: {command}")
+                stdin, stdout, stderr = ssh.exec_command(command)
+                print(stderr.read().decode())
+            
+        except Exception as e:
+            print(f"Failed Update IPTable {instance['PublicDnsName']}: {str(e)}")
 
-    for trusted_machine in trusteds:
-        print(f"Deploying Trusted Machine Credentials to large instance: {trusted_machine['PublicDnsName']}")
-        deploy_to_instance(trusted_machine['PublicDnsName'])
-        print(f"Deploying to trusted machine instance: {trusted_machine['PublicDnsName']}")
-        deploy_script_via_scp(trusted_machine['PublicDnsName'], "trusted_machine", LOCAL_TRUSTED_PATH, gatekeepers[0]['PrivateIpAddress'])
-
-    for gatekeeper in gatekeepers:
-        print(f"Deploying Gatekeeper Credentials to large instance: {gatekeeper['PublicDnsName']}")
-        deploy_to_instance(gatekeeper['PublicDnsName'])
-        print(f"Deploying to gatekeeper instance: {gatekeeper['PublicDnsName']}")
-        deploy_script_via_scp(gatekeeper['PublicDnsName'], "gatekeeper", LOCAL_GATEKEEPER_PATH)
-
-    #Update SSH Rule for trusted machine and cluster
-    update_ssh_rules(ec2, gatekeeper['PrivateIpAddress'], trusted_machine['PrivateIpAddress'], proxy['PrivateIpAddress'])
-
-deploy_files() #TODO: Remove
+# def run():
+#     ec2 = boto3.client('ec2', region_name=REGION)
+#     worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(ec2)
+#     #worker0, worker1 = worker
+#     ssh = create_ssh_client("ec2-44-210-136-117.compute-1.amazonaws.com")
+#     command = "python3 -m uvicorn worker:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &"
+#     ssh.exec_command(command)
+#     ssh.close()
+#     ec2 = boto3.client('ec2', region_name=REGION)
+#     worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(ec2)
+#     #worker0, worker1 = worker
+#     ssh = create_ssh_client("ec2-3-83-201-229.compute-1.amazonaws.com")
+#     command = "python3 -m uvicorn worker:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &"
+#     ssh.exec_command(command)
+#     ssh.close()
+#deploy_files() #TODO: Remove

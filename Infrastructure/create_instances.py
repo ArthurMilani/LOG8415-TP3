@@ -290,5 +290,5 @@ def create_instances():
         update_security_groups(ec2_client, TRUSTED_SECURITY_GROUP_NAME)
         update_security_groups(ec2_client, CLUSTER_SECURITY_GROUP_NAME)
         
-create_instances()
+#create_instances()
         

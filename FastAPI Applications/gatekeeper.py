@@ -87,8 +87,8 @@ def sql_injection_validation(query):
     suspect_patterns = [
         r"(\||&&|\|\||>|<|\$|\`)",  #Suspect characters
         r"(--|;|#)",                #Comments  
-        r"(\'.*?(=|or|and))",       #Condition manipulation
-        r"(rm|ls|cat|echo|mkdir|wget|curl|chmod|chown|sudo)" #Shell commands
+        r"(\'.*?\b(=|or|and)\b)"    #Condition manipulation
+        r"(^|\s)(rm|ls|cat|echo|mkdir|wget|curl|chmod|chown|sudo)(\s|$)" #Shell commands
     ]   
     for padrao in suspect_patterns:
         if re.search(padrao, query, re.IGNORECASE):

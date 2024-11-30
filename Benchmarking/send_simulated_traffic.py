@@ -111,5 +111,5 @@ async def run_sim(gatekeeper_dns):
             
 
 #TODO: Remove
-gatekeeper_dns = "98.84.176.48"
-asyncio.run(run_sim(gatekeeper_dns))
+# gatekeeper_dns = "98.84.176.48"
+# asyncio.run(run_sim(gatekeeper_dns))
