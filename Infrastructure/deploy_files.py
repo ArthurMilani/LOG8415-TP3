@@ -2,7 +2,6 @@ from pathlib import Path
 import sys
 import boto3
 import paramiko
-import os
 from scp import SCPClient
 
 parent_dir = Path(__file__).resolve().parent.parent
@@ -188,6 +187,7 @@ def deploy_files():
     #update_ssh_rules()
 
     return gatekeeper['PublicDnsName'], instances, update_ssh_data
+
 
 
 # Update the SSH rule to allow traffic only from the selected instances

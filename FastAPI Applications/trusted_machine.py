@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from pathlib import Path
@@ -10,8 +11,20 @@ import requests
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 REGION = "us-east-1"
+
+# Global variable to store the trusted machine DNS
+@asynccontextmanager
+async def lifespan(app: FastAPI): #Using lifespan in the beginning of the application to avoid sending too many requests to the AWS API
+    print("Initializing appliacation!")
+    await define_instances_data()
+    yield
+
+async def define_instances_data():
+    global proxy_dns
+    proxy_dns = get_running_instances("proxy")[0]['PrivateIpAddress']
+
 # Create FastAPI app
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 
 #Write requests
@@ -26,7 +39,7 @@ def receive_write_request(write_request: WriteRequest):
     response = None
     query = write_request.query
     method = write_request.method
-    proxy_dns = get_running_instances("proxy")[0]['PrivateIpAddress']
+    #proxy_dns = get_running_instances("proxy")[0]['PrivateIpAddress']
     if method == "write":
         response = send_write_request(query, "/write", proxy_dns)
     elif method == "direct_hit" or method == "random" or method == "customized":
@@ -73,3 +86,5 @@ def get_running_instances(tag):
                     'Tags': instance['Tags']
                 })
     return instances_info
+
+

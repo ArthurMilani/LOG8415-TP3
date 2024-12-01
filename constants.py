@@ -9,43 +9,34 @@ LOCAL_INFO_JSON_PATH = Path(f'./{JSON_FILENAME}').resolve()
 LARGE_INSTANCE_TYPE = "t2.large"
 MICRO_INSTANCE_TYPE = "t2.micro"
 DB_CONFIG = {
-    "host": "localhost",     # Ou "127.0.0.1"
-    "user": "root",          # Usuário do MySQL
-    "password": "",          # Senha vazia
-    "database": "sakila",    # Nome do banco de dados
+    "host": "localhost",     
+    "user": "root",          
+    "password": "",          
+    "database": "sakila",    
 }
-SECURITY_GROUP_NAME = 'my-tp3-security-group'
+SECURITY_GROUP_NAME = 'gatekeeper-security-group'
 TRUSTED_SECURITY_GROUP_NAME = 'trusted-security-group'
 CLUSTER_SECURITY_GROUP_NAME = 'cluster-security-group'
 GATEKEEPER_IPCONFIG = [
                 {
-                    "IpProtocol": "tcp",
+                    "IpProtocol": "tcp",   # Allow SSH traffic
                     "FromPort": 22,
                     "ToPort": 22,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  # Allow SSH from anywhere
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}], 
                 },
                 {
-                    "IpProtocol": "tcp",
+                    "IpProtocol": "tcp",   # Allow traffic on port 8000
                     "FromPort": 8000,
                     "ToPort": 8000,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  # Allow traffic on port 8000
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  
                 },
                 {
-                    "IpProtocol": 'icmp',  # Protocolo ICMP
-                    "FromPort": -1,       # ICMP não usa portas, -1 é padrão
+                    "IpProtocol": 'icmp',  # ICMP Protocol
+                    "FromPort": -1,       
                     "ToPort": -1,
-                    "IpRanges": [{'CidrIp': '0.0.0.0/0'}]  # Permite de qualquer lugar
+                    "IpRanges": [{'CidrIp': '0.0.0.0/0'}] 
                 },
             ]
-TRUSTED_IPCONFIG = [
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": 22,
-                    "ToPort": 22,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  # Allow SSH from anywhere
-                }
-
-] #TODO
 
 CLUSTER_IPCONFIG = [
                 {

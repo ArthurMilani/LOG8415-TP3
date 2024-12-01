@@ -6,13 +6,26 @@ import boto3
 import uvicorn
 import requests
 import re
+from contextlib import asynccontextmanager
 
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 REGION = "us-east-1"
+
+# Global variable to store the trusted machine DNS
+@asynccontextmanager
+async def lifespan(app: FastAPI): #Using lifespan in the beginning of the application to avoid sending too many requests to the AWS API
+    print("Initializing appliacation!")
+    await define_instances_data()
+    yield
+
+async def define_instances_data():
+    global trusted_machine_dns
+    trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
+
 # Create FastAPI app
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 
 #Write requests
@@ -27,7 +40,7 @@ def receive_write_request(write_request: WriteRequest):
     validation_result = write_validations(query)
     if validation_result == "validated":
         json = {"query": query, "method": "write"}
-        trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
+        #trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
         response = send_request(json, trusted_machine_dns)
     else:
         raise HTTPException(
@@ -46,7 +59,7 @@ def receive_read_request(
     validation_result = read_validations(query, method)
     if validation_result == "validated":
         json = {"query": query, "method": method}
-        trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
+        #trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
         response = send_request(json, trusted_machine_dns)
     else:
         raise HTTPException(
@@ -109,6 +122,7 @@ def send_request(json, instance_dns):
 
 # Get running instances, in this case, the trusted machine TODO: Can be improved
 def get_running_instances(tag = "trusted_machine"):
+    print("Ola")
     ec2_client = boto3.client('ec2', region_name=REGION)
     filters = [{'Name': 'instance-state-name', 'Values': ['running']}]
     response = ec2_client.describe_instances(Filters=filters)
@@ -123,3 +137,5 @@ def get_running_instances(tag = "trusted_machine"):
                     'Tags': instance['Tags']
                 })
     return instances_info
+
+
