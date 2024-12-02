@@ -39,7 +39,6 @@ def receive_write_request(write_request: WriteRequest):
     response = None
     query = write_request.query
     method = write_request.method
-    #proxy_dns = get_running_instances("proxy")[0]['PrivateIpAddress']
     if method == "write":
         response = send_write_request(query, "/write", proxy_dns)
     elif method == "direct_hit" or method == "random" or method == "customized":

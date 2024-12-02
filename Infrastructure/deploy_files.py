@@ -265,9 +265,9 @@ def perform_sysbench_benchmarks(instances_dns):
         for command in commands:
             print(f"Executing: {command}")
             stdin, stdout, stderr = ssh.exec_command(command)
-            #print(stderr.read().decode())
             print(stdout.read().decode())
         ssh.close()
+
 
 def set_ip_table_rules():
     ec2 = boto3.client('ec2', region_name=REGION)
@@ -342,19 +342,3 @@ def set_ip_table_rules():
         except Exception as e:
             print(f"Failed Update IPTable {instance['PublicDnsName']}: {str(e)}")
 
-# def run():
-#     ec2 = boto3.client('ec2', region_name=REGION)
-#     worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(ec2)
-#     #worker0, worker1 = worker
-#     ssh = create_ssh_client("ec2-44-210-136-117.compute-1.amazonaws.com")
-#     command = "python3 -m uvicorn worker:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &"
-#     ssh.exec_command(command)
-#     ssh.close()
-#     ec2 = boto3.client('ec2', region_name=REGION)
-#     worker, manager, proxy, gatekeeper, trusted_machine = get_running_instances(ec2)
-#     #worker0, worker1 = worker
-#     ssh = create_ssh_client("ec2-3-83-201-229.compute-1.amazonaws.com")
-#     command = "python3 -m uvicorn worker:app --host 0.0.0.0 --port 8000 > /home/ubuntu/app.log 2>&1 &"
-#     ssh.exec_command(command)
-#     ssh.close()
-#deploy_files() #TODO: Remove

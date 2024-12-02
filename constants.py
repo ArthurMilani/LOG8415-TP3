@@ -29,23 +29,10 @@ GATEKEEPER_IPCONFIG = [
                     "FromPort": 8000,
                     "ToPort": 8000,
                     "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  
-                },
-                {
-                    "IpProtocol": 'icmp',  # ICMP Protocol
-                    "FromPort": -1,       
-                    "ToPort": -1,
-                    "IpRanges": [{'CidrIp': '0.0.0.0/0'}] 
-                },
+                }
+                
             ]
 
-CLUSTER_IPCONFIG = [
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": 22,
-                    "ToPort": 22,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  # Allow SSH from anywhere
-                }
-] #TODO
 
 MICRO_INSTANCE = {
         "ImageId": "ami-0e86e20dae9224db8",

@@ -44,7 +44,6 @@ Response: {response_json}
 async def call_endpoint_read_http(session, request_num, gatekeeper_dns, read_type):
 
     query = search_random_users()
-#TODO: Adpatar para imprimir mais de um usuário
     url = f"http://{gatekeeper_dns}:8000/read?method={read_type}&query={query}"
     headers = {'content-type': 'application/json'}
     try:
@@ -137,6 +136,3 @@ async def run_sim(gatekeeper_dns):
 
 
 
-# #TODO: Remove
-# gatekeeper_dns = "23.22.133.132"
-# asyncio.run(run_sim(gatekeeper_dns))

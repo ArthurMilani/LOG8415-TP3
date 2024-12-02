@@ -40,12 +40,10 @@ class WriteRequest(BaseModel):
 def receive_write_request(write_request: WriteRequest):
     query = write_request.query
     # The first execution of the write request is done in the manager
-    #manager_dns = get_running_instances("manager")[0]['PublicDnsName']
     manager_dns = manager[0]['PublicDnsName']
     manager_response = send_write_request_master(query, "/write", manager_dns)
     # If the manager response is successful, the write request is replicated to the workers
     if manager_response["status"] == "success": 
-        #workers = get_running_instances("worker")
         replication_response = replicate_write(query, "/write", workers)
         # If the replication is successful, the response is returned
         if replication_response["status"] == "failed":
@@ -115,7 +113,6 @@ def receive_read_request(
 #Send the read request to the manager
 def direct_hit(query):
     print("Using Direct hit")
-    #instances = get_running_instances("manager")
     print(f"Instances: {manager}")
     responseJson = send_read_request(f"/read?query={query}", manager[0]['PublicDnsName'])
     if responseJson["status"] == "failed":
@@ -129,7 +126,6 @@ def direct_hit(query):
 #Send the read request to a random worker
 def random_hit(query):
     print("Using Random")
-    #instances = get_running_instances("worker")
     num = random.randint(0, len(workers) - 1)
     responseJson = send_read_request(f"/read?query={query}", workers[num]['PublicDnsName'])
     if responseJson["status"] == "failed":
@@ -142,7 +138,6 @@ def random_hit(query):
 
 #Send the read request to the worker with the lowest ping
 def customized(query):
-    #workers = get_running_instances("worker")
     print("Using Customized")
     best_ping = 10000
     ping = 0

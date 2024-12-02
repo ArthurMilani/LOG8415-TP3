@@ -275,7 +275,7 @@ def create_instances():
     # Create Key Pair
     key_pair_name = create_key_pair(ec2_client)
 
-    # Create Security Group
+    # Create Gatekeeper Security Group
     security_group_id = create_security_group(ec2_client, SECURITY_GROUP_NAME)
 
     # Create Trusted Security Group
@@ -290,5 +290,5 @@ def create_instances():
         update_security_groups(ec2_client, TRUSTED_SECURITY_GROUP_NAME)
         update_security_groups(ec2_client, CLUSTER_SECURITY_GROUP_NAME)
         
-#create_instances()
+
         

@@ -40,7 +40,6 @@ def receive_write_request(write_request: WriteRequest):
     validation_result = write_validations(query)
     if validation_result == "validated":
         json = {"query": query, "method": "write"}
-        #trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
         response = send_request(json, trusted_machine_dns)
     else:
         raise HTTPException(
@@ -59,7 +58,6 @@ def receive_read_request(
     validation_result = read_validations(query, method)
     if validation_result == "validated":
         json = {"query": query, "method": method}
-        #trusted_machine_dns = get_running_instances("trusted_machine")[0]['PublicDnsName']
         response = send_request(json, trusted_machine_dns)
     else:
         raise HTTPException(
@@ -83,7 +81,7 @@ def write_validations(query):
 
 
 # Validate read requests
-def read_validations(query, method):
+def read_validations(query):
     allowed_commands = ("select", "use", "show") #Allowed commands for read
     statement = query.strip().lower()
     if statement.strip():  # Ignore empty commands
@@ -120,7 +118,7 @@ def send_request(json, instance_dns):
         return {"status": "failed", "message": str(e)}
 
 
-# Get running instances, in this case, the trusted machine TODO: Can be improved
+# Get running instances, in this case, the trusted machine
 def get_running_instances(tag = "trusted_machine"):
     print("Ola")
     ec2_client = boto3.client('ec2', region_name=REGION)
