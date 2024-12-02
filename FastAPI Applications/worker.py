@@ -2,43 +2,42 @@ from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 import subprocess
 import uvicorn
-import logging
-import requests
-import time
 
 # Create FastAPI app
 app = FastAPI()
 
-
 class WriteRequest(BaseModel):
     query: str
 
+
+#Only write requests
 @app.post("/write")
 def receive_request(write_request: WriteRequest):
 
     query = write_request.query
-
+    query = "USE sakila;" + query + ";" #Building the query to be executed
     result = execute_query(query)
-    # if "error" in result:
-    #     raise HTTPException(status_code=500, detail=result["error"])
+    if result["status"] == "failed":
+        raise HTTPException(status_code=400, detail=result["error"])
     return result
 
-    #TODO: Allow a replication of the operation to the workers
 
-
+#Only read requests
 @app.get("/read")
 def read_db(
     query: str = Query(..., description="SQL query to execute")
 ):
+    query = "USE sakila;" + query + ";" #Building the query to be executed
     result = execute_query(query)
-    # if "error" in result:
-        # raise HTTPException(status_code=500, detail=result["error"])
+    if result["status"] == "failed":
+        raise HTTPException(status_code=400, detail=result["error"])
     return result
 
-    
+
+#Function to execute the query in the database
 def execute_query(query):
     try:
-        # Executa o comando MySQL diretamente no terminal
+        #The command will be executed in the terminal
         result = subprocess.run(
             ['sudo', 'mysql', '-e', query],
             stdout=subprocess.PIPE,
@@ -50,7 +49,7 @@ def execute_query(query):
         else:
             print(f"Erro: {result.stderr}")
             raise Exception({result.stderr})
-        print("Ola")
         return {"result": result, "status": "success"}   
     except Exception as e:
-        return {"error": f"Erro ao executar a query: {e}", "status": "failed"}
+        print(f"Query execution error in one worker: {e}")
+        return {"error": f"Query execution error in one worker: {e}", "status": "failed"}
